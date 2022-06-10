@@ -1,7 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
+#include "vulkan_api.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -42,7 +41,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityF
 	return VK_FALSE;
 }
 
-VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger)
+static VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger)
 {
 	PFN_vkCreateDebugUtilsMessengerEXT func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
 
@@ -56,7 +55,7 @@ VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMes
 	}
 }
 
-void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator)
+static void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator)
 {
 	PFN_vkDestroyDebugUtilsMessengerEXT func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
 
@@ -72,7 +71,7 @@ typedef struct QueueFamilyIndices
 	int32_t presentFamily;
 }QueueFamilyIndices;
 
-bool QueueFamilyIndices_isComplete(const QueueFamilyIndices* qi)
+static bool QueueFamilyIndices_isComplete(const QueueFamilyIndices* qi)
 {
 	return (qi->graphicsFamily != INVALID_INDEX) && (qi->presentFamily != INVALID_INDEX);
 }
@@ -87,11 +86,11 @@ typedef struct SwapChainSupportDetails
 	int num_presentModes;
 }SwapChainSupportDetails;
 
-static GLFWwindow* window;
+static GLFWwindow* window = VK_NULL_HANDLE;
 
-static VkInstance instance;
-static VkDebugUtilsMessengerEXT debugMessenger;
-static VkSurfaceKHR surface;
+static VkInstance instance = VK_NULL_HANDLE;
+static VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
+static VkSurfaceKHR surface = VK_NULL_HANDLE;
 
 static VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 static VkDevice device;
@@ -114,14 +113,16 @@ VkCommandBuffer commandBuffers[8];
 static VkFence imagesInFlight[8];
 
 static VkRenderPass renderPass;
+static VkDescriptorSetLayout descriptorSetLayout;
 static VkPipelineLayout pipelineLayout;
 static VkPipeline graphicsPipeline;
 
-static VkBuffer vertexBuffer;
-static VkDeviceMemory vertexBufferMemory;
+static VertexBuffer vertexBuffer;
+static VertexBuffer indexBuffer;
 
-static VkBuffer indexBuffer;
-static VkDeviceMemory indexBufferMemory;
+static VkDescriptorPool descriptorPool;
+static VertexBuffer uniformBuffers[MAX_FRAMES_IN_FLIGHT];
+static VkDescriptorSet descriptorSets[MAX_FRAMES_IN_FLIGHT];
 
 static VkSemaphore imageAvailableSemaphores[MAX_FRAMES_IN_FLIGHT];
 static VkSemaphore renderFinishedSemaphores[MAX_FRAMES_IN_FLIGHT];
@@ -129,17 +130,6 @@ static VkFence inFlightFences[MAX_FRAMES_IN_FLIGHT];
 static size_t currentFrame = 0;
 
 static bool framebufferResized = false;
-
-typedef struct
-{
-	float x,y,z;
-}vec3;
-
-typedef struct
-{
-	vec3 pos;
-	vec3 color;
-}vertex_t;
 
 #define NUM_VERTS 4
 static vertex_t verts[NUM_VERTS] =
@@ -151,7 +141,7 @@ static vertex_t verts[NUM_VERTS] =
 };
 
 #define NUM_INDS 6
-static uint16_t indices[NUM_INDS] = 
+static uint16_t indices[NUM_INDS] =
 {
 	0,1,2, 2,3,0
 };
@@ -161,7 +151,7 @@ static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
 	framebufferResized = true;
 }
 
-void initWindow()
+static void initWindow()
 {
 	glfwInit();
 
@@ -171,7 +161,7 @@ void initWindow()
 	glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 }
 
-void cleanupSwapChain()
+static void cleanupSwapChain()
 {
 	for (int i = 0; i < num_swapchain_images; i++)
 	{
@@ -192,15 +182,24 @@ void cleanupSwapChain()
 	vkDestroySwapchainKHR(device, swapChain, NULL);
 }
 
-void cleanup()
+static void cleanup()
 {
 	cleanupSwapChain();
 
-	vkDestroyBuffer(device, vertexBuffer, NULL);
-	vkFreeMemory(device, vertexBufferMemory, NULL);
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		vkDestroyBuffer(device, uniformBuffers[i].buffer, NULL);
+		vkFreeMemory(device, uniformBuffers[i].memory, NULL);
+	}
 
-	vkDestroyBuffer(device, indexBuffer, NULL);
-	vkFreeMemory(device, indexBufferMemory, NULL);
+	vkDestroyDescriptorPool(device, descriptorPool, NULL);
+	vkDestroyDescriptorSetLayout(device, descriptorSetLayout, NULL);
+
+	vkDestroyBuffer(device, vertexBuffer.buffer, NULL);
+	vkFreeMemory(device, vertexBuffer.memory, NULL);
+
+	vkDestroyBuffer(device, indexBuffer.buffer, NULL);
+	vkFreeMemory(device, indexBuffer.memory, NULL);
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 	{
@@ -226,7 +225,7 @@ void cleanup()
 	glfwTerminate();
 }
 
-bool checkValidationLayerSupport()
+static bool checkValidationLayerSupport()
 {
 	uint32_t layerCount;
 	vkEnumerateInstanceLayerProperties(&layerCount, NULL);
@@ -266,7 +265,7 @@ const char** getRequiredExtensions(int* count)
 	return glfwExtensions;
 }
 
-void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT* createInfo)
+static void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT* createInfo)
 {
 	ZERO_OUT(*createInfo);
 	createInfo->sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -275,7 +274,7 @@ void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT* create
 	createInfo->pfnUserCallback = debugCallback;
 }
 
-void createInstance()
+static void createInstance()
 {
 	if (enableValidationLayers && !checkValidationLayerSupport())
 	{
@@ -325,7 +324,7 @@ void createInstance()
 	}
 }
 
-void setupDebugMessenger()
+static void setupDebugMessenger()
 {
 	if (!enableValidationLayers) return;
 
@@ -338,7 +337,7 @@ void setupDebugMessenger()
 	}
 }
 
-void createSurface()
+static void createSurface()
 {
 	if (glfwCreateWindowSurface(instance, window, NULL, &surface) != VK_SUCCESS)
 	{
@@ -346,7 +345,7 @@ void createSurface()
 	}
 }
 
-QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
+static QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
 {
 	QueueFamilyIndices indices;
 
@@ -382,7 +381,7 @@ QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
 
 #define MAX_AVALIABLE_EXTENSIONS 512
 
-bool checkDeviceExtensionSupport(VkPhysicalDevice device)
+static bool checkDeviceExtensionSupport(VkPhysicalDevice device)
 {
 	uint32_t extensionCount;
 	VkExtensionProperties availableExtensions[MAX_AVALIABLE_EXTENSIONS];
@@ -405,7 +404,7 @@ bool checkDeviceExtensionSupport(VkPhysicalDevice device)
 	return matches == NUM_DEVICE_EXTENSIONS;
 }
 
-SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device)
+static SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device)
 {
 	SwapChainSupportDetails details;
 	memset(&details, 0, sizeof(SwapChainSupportDetails));
@@ -433,7 +432,7 @@ SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device)
 	return details;
 }
 
-bool isDeviceSuitable(VkPhysicalDevice device)
+static bool isDeviceSuitable(VkPhysicalDevice device)
 {
 	QueueFamilyIndices indices = findQueueFamilies(device);
 
@@ -449,7 +448,7 @@ bool isDeviceSuitable(VkPhysicalDevice device)
 	return QueueFamilyIndices_isComplete(&indices) && extensionsSupported && swapChainAdequate;
 }
 
-void pickPhysicalDevice()
+static void pickPhysicalDevice()
 {
 	uint32_t deviceCount = 0;
 	vkEnumeratePhysicalDevices(instance, &deviceCount, NULL);
@@ -477,7 +476,7 @@ void pickPhysicalDevice()
 	}
 }
 
-void createLogicalDevice()
+static void createLogicalDevice()
 {
 	QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
@@ -530,7 +529,7 @@ void createLogicalDevice()
 	vkGetDeviceQueue(device, indices.presentFamily, 0, &presentQueue);
 }
 
-VkSurfaceFormatKHR chooseSwapSurfaceFormat(SwapChainSupportDetails* details)
+static VkSurfaceFormatKHR chooseSwapSurfaceFormat(SwapChainSupportDetails* details)
 {
 	for (int i = 0; i < details->num_formats; i++)
 	{
@@ -543,7 +542,7 @@ VkSurfaceFormatKHR chooseSwapSurfaceFormat(SwapChainSupportDetails* details)
 	return details->formats[0];
 }
 
-VkPresentModeKHR chooseSwapPresentMode(SwapChainSupportDetails* details)
+static VkPresentModeKHR chooseSwapPresentMode(SwapChainSupportDetails* details)
 {
 	for (int i = 0; i < details->num_presentModes; i++)
 	{
@@ -567,7 +566,7 @@ static int clampi(int value, int min, int max)
 	return value;
 }
 
-VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR* capabilities)
+static VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR* capabilities)
 {
 	if (capabilities->currentExtent.width != UINT32_MAX)
 	{
@@ -591,7 +590,7 @@ VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR* capabilities)
 	}
 }
 
-void createSwapChain()
+static void createSwapChain()
 {
 	SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
 
@@ -649,7 +648,7 @@ void createSwapChain()
 	swapChainExtent = extent;
 }
 
-void createImageViews()
+static void createImageViews()
 {
 	for (size_t i = 0; i < num_swapchain_images; i++)
 	{
@@ -676,7 +675,7 @@ void createImageViews()
 	}
 }
 
-void createRenderPass()
+static void createRenderPass()
 {
 	VkAttachmentDescription colorAttachment;
 	ZERO_OUT(colorAttachment);
@@ -747,12 +746,12 @@ static shaderSource_t readFile(const char* filename)
 	source.buffer = (char*)malloc(source.size);
 	fseek(file, 0, SEEK_SET);
 	fread(source.buffer, source.size, 1, file);
-	
+
 	fclose(file);
 	return source;
 }
 
-VkShaderModule createShaderModule(shaderSource_t code)
+static VkShaderModule createShaderModule(shaderSource_t code)
 {
 	VkShaderModuleCreateInfo createInfo;
 	ZERO_OUT(createInfo);
@@ -801,7 +800,29 @@ static vertexInputAttributeDescriptions_t Vertex_getAttributeDescriptions()
 	return viad;
 }
 
-void createGraphicsPipeline()
+static void createDescriptorSetLayout()
+{
+	VkDescriptorSetLayoutBinding uboLayoutBinding;
+	ZERO_OUT(uboLayoutBinding);
+	uboLayoutBinding.binding = 0;
+	uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	uboLayoutBinding.descriptorCount = 1;
+	uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	uboLayoutBinding.pImmutableSamplers = NULL;
+
+	VkDescriptorSetLayoutCreateInfo layoutInfo;
+	ZERO_OUT(layoutInfo);
+	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	layoutInfo.bindingCount = 1;
+	layoutInfo.pBindings = &uboLayoutBinding;
+
+	if (vkCreateDescriptorSetLayout(device, &layoutInfo, NULL, &descriptorSetLayout) != VK_SUCCESS)
+	{
+		printf("failed to create descriptor set!\n");
+	}
+}
+
+static void createGraphicsPipeline()
 {
 	shaderSource_t vertShaderCode = readFile("data/vert.spv");
 	shaderSource_t fragShaderCode = readFile("data/frag.spv");
@@ -904,7 +925,8 @@ void createGraphicsPipeline()
 	VkPipelineLayoutCreateInfo pipelineLayoutInfo;
 	ZERO_OUT(pipelineLayoutInfo);
 	pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pipelineLayoutInfo.setLayoutCount = 0;
+	pipelineLayoutInfo.setLayoutCount = 1;
+	pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
 	pipelineLayoutInfo.pushConstantRangeCount = 0;
 
 	if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, NULL, &pipelineLayout) != VK_SUCCESS)
@@ -937,7 +959,7 @@ void createGraphicsPipeline()
 	vkDestroyShaderModule(device, vertShaderModule, NULL);
 }
 
-void createFramebuffers()
+static void createFramebuffers()
 {
 	for (size_t i = 0; i < num_swapchain_images; i++)
 	{
@@ -963,7 +985,7 @@ void createFramebuffers()
 	}
 }
 
-void createCommandPool()
+static void createCommandPool()
 {
 	QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
 
@@ -994,12 +1016,6 @@ static int findMemoryType(int typeFilter, VkMemoryPropertyFlags properties)
 
 	printf("Could not find suitable memory type for VkBuffer!\n");
 }
-
-typedef struct
-{
-	VkBuffer buffer;
-	VkDeviceMemory memory;
-}VertexBuffer;
 
 static VertexBuffer createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties)
 {
@@ -1063,7 +1079,7 @@ static void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size)
 	vkCmdCopyBuffer(commandBuffer, src, dst, 1, &copyRegion);
 
 	vkEndCommandBuffer(commandBuffer);
-	
+
 	VkSubmitInfo submitInfo;
 	ZERO_OUT(submitInfo);
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1087,26 +1103,23 @@ static void createVertexBuffer()
 	memcpy(data, verts, bufferSize);
 	vkUnmapMemory(device, stagingBuf.memory);
 
-	VertexBuffer vertexBuf = createBuffer(
+	vertexBuffer = createBuffer(
 		bufferSize,
 		VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 	);
 
-	copyBuffer(stagingBuf.buffer, vertexBuf.buffer, bufferSize);
+	copyBuffer(stagingBuf.buffer, vertexBuffer.buffer, bufferSize);
 
 	vkDestroyBuffer(device, stagingBuf.buffer, NULL);
 	vkFreeMemory(device, stagingBuf.memory, NULL);
-
-	vertexBuffer = vertexBuf.buffer;
-	vertexBufferMemory = vertexBuf.memory;
 }
 
 static void createIndexBuffer()
 {
 	VkDevice bufferSize = sizeof(uint16_t) * NUM_INDS;
 
-	VertexBuffer stagingBuf = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+	VertexBuffer stagingBuf = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
 	void* data;
@@ -1114,21 +1127,90 @@ static void createIndexBuffer()
 	memcpy(data, indices, bufferSize);
 	vkUnmapMemory(device, stagingBuf.memory);
 
-	VertexBuffer indexBuf = createBuffer(bufferSize, 
+	indexBuffer = createBuffer(bufferSize,
 		VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
 		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 	);
 
-	copyBuffer(stagingBuf.buffer, indexBuf.buffer, bufferSize);
+	copyBuffer(stagingBuf.buffer, indexBuffer.buffer, bufferSize);
 
 	vkDestroyBuffer(device, stagingBuf.buffer, NULL);
 	vkFreeMemory(device, stagingBuf.memory, NULL);
-
-	indexBuffer = indexBuf.buffer;
-	indexBufferMemory = indexBuf.memory;
 }
 
-void createCommandBuffers()
+static void createUniformBuffers()
+{
+	VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+	for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		uniformBuffers[i] = createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+	}
+}
+
+static void createDescriptorPool()
+{
+	VkDescriptorPoolSize poolSize;
+	ZERO_OUT(poolSize);
+	poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	poolSize.descriptorCount = MAX_FRAMES_IN_FLIGHT;
+
+	VkDescriptorPoolCreateInfo poolInfo;
+	ZERO_OUT(poolInfo);
+	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	poolInfo.poolSizeCount = 1;
+	poolInfo.pPoolSizes = &poolSize;
+	poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
+
+	if (vkCreateDescriptorPool(device, &poolInfo, NULL, &descriptorPool) != VK_SUCCESS)
+	{
+		printf("falied to create descriptor pool!\n");
+	}
+}
+
+static void createDescriptorSets()
+{
+	VkDescriptorSetLayout layouts[MAX_FRAMES_IN_FLIGHT];
+	layouts[0] = descriptorSetLayout;
+	layouts[1] = descriptorSetLayout;
+
+	VkDescriptorSetAllocateInfo allocInfo;
+	ZERO_OUT(allocInfo);
+	allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	allocInfo.descriptorPool = descriptorPool;
+	allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+	allocInfo.pSetLayouts = layouts;
+
+	if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets))
+	{
+		printf("failed to allocate descriptor sets!\n");
+	}
+
+	for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		VkDescriptorBufferInfo bufferInfo;
+		ZERO_OUT(bufferInfo);
+		bufferInfo.buffer = uniformBuffers[i].buffer;
+		bufferInfo.offset = 0;
+		bufferInfo.range = sizeof(UniformBufferObject);
+
+		VkWriteDescriptorSet descriptorWrite;
+		ZERO_OUT(descriptorWrite);
+		descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrite.dstSet = descriptorSets[i];
+		descriptorWrite.dstBinding = 0;
+		descriptorWrite.dstArrayElement = 0;
+		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		descriptorWrite.descriptorCount = 1;
+		descriptorWrite.pBufferInfo = &bufferInfo;
+		descriptorWrite.pImageInfo = NULL;
+		descriptorWrite.pTexelBufferView = NULL;
+
+		vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, NULL);
+	}
+}
+
+static void createCommandBuffers()
 {
 	VkCommandBufferAllocateInfo allocInfo;
 	ZERO_OUT(allocInfo);
@@ -1170,11 +1252,12 @@ static void recordCommandBuffer(VkCommandBuffer commandBuffer, int imageIndex)
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
-	VkBuffer vertexBuffers[] = {vertexBuffer};
+	VkBuffer vertexBuffers[] = {vertexBuffer.buffer};
 	VkDeviceSize offsets[] = {0};
 	vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-	vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
-
+	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, NULL);
+	vkCmdBindIndexBuffer(commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT16);
+		
 	vkCmdDrawIndexed(commandBuffer, NUM_INDS, 1, 0, 0, 0);
 
 	vkCmdEndRenderPass(commandBuffer);
@@ -1185,7 +1268,7 @@ static void recordCommandBuffer(VkCommandBuffer commandBuffer, int imageIndex)
 	}
 }
 
-void createSyncObjects()
+static void createSyncObjects()
 {
 	VkSemaphoreCreateInfo semaphoreInfo;
 	ZERO_OUT(semaphoreInfo);
@@ -1207,7 +1290,7 @@ void createSyncObjects()
 	}
 }
 
-void recreateSwapChain()
+static void recreateSwapChain()
 {
 	int width = 0, height = 0;
 	glfwGetFramebufferSize(window, &width, &height);
@@ -1227,13 +1310,31 @@ void recreateSwapChain()
 	createSwapChain();
 	createImageViews();
 	createRenderPass();
+	createDescriptorSetLayout();
 	createGraphicsPipeline();
 	createFramebuffers();
 
 	// memset(imagesInFlight, 0, sizeof(VkFence) * num_swapchain_images);
 }
 
-void drawFrame()
+static float angle = 0.f;
+
+static void updateUniformBuffer(int currentFrame)
+{
+	UniformBufferObject ubo;
+	ubo.proj = MatrixPerspective(1.f, (float)WIDTH/(float)HEIGHT, 0.1f, 25.f);
+	//ubo.proj.v[1].y *= -1.f;
+	ubo.view = MatrixLookAt(Vec3(3,-3,3), Vec3(0,0,0), Vec3(0,1,0));
+	angle += 0.01f;
+	ubo.model = MatrixRotateZ(angle);
+
+	void* data;
+	vkMapMemory(device, uniformBuffers[currentFrame].memory, 0, sizeof(UniformBufferObject), 0, &data);
+	memcpy(data, &ubo, sizeof(UniformBufferObject));
+	vkUnmapMemory(device, uniformBuffers[currentFrame].memory);
+}
+
+static void drawFrame()
 {
 	vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
@@ -1251,6 +1352,8 @@ void drawFrame()
 	}
 
 	vkResetFences(device, 1, &inFlightFences[currentFrame]);
+
+	updateUniformBuffer(currentFrame);
 
 	vkResetCommandBuffer(commandBuffers[currentFrame], 0);
 	recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -1318,11 +1421,15 @@ void initVulkan()
 	createSwapChain();
 	createImageViews();
 	createRenderPass();
+	createDescriptorSetLayout();
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
 	createVertexBuffer();
 	createIndexBuffer();
+	createUniformBuffers();
+	createDescriptorPool();
+	createDescriptorSets();
 	createCommandBuffers();
 	createSyncObjects();
 }
