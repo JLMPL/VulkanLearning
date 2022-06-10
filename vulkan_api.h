@@ -18,6 +18,12 @@ typedef struct
 
 typedef struct
 {
+	VkImage image;
+	VkDeviceMemory memory;
+}Image;
+
+typedef struct
+{
 	mat4 proj;
 	mat4 view;
 	mat4 model;

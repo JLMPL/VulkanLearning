@@ -2,6 +2,9 @@
 
 #include "vulkan_api.h"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -123,6 +126,8 @@ static VertexBuffer indexBuffer;
 static VkDescriptorPool descriptorPool;
 static VertexBuffer uniformBuffers[MAX_FRAMES_IN_FLIGHT];
 static VkDescriptorSet descriptorSets[MAX_FRAMES_IN_FLIGHT];
+
+static Image textureImage;
 
 static VkSemaphore imageAvailableSemaphores[MAX_FRAMES_IN_FLIGHT];
 static VkSemaphore renderFinishedSemaphores[MAX_FRAMES_IN_FLIGHT];
@@ -1051,7 +1056,7 @@ static VertexBuffer createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, Vk
 	return vb;
 }
 
-static void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size)
+static VkCommandBuffer beginSingleTimeCommands()
 {
 	VkCommandBufferAllocateInfo allocInfo;
 	ZERO_OUT(allocInfo);
@@ -1070,14 +1075,11 @@ static void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size)
 
 	vkBeginCommandBuffer(commandBuffer, &beginInfo);
 
-	VkBufferCopy copyRegion;
-	ZERO_OUT(copyRegion);
-	copyRegion.srcOffset = 0;
-	copyRegion.dstOffset = 0;
-	copyRegion.size = size;
+	return commandBuffer;
+}
 
-	vkCmdCopyBuffer(commandBuffer, src, dst, 1, &copyRegion);
-
+static void endSingleTimeCommands(VkCommandBuffer commandBuffer)
+{
 	vkEndCommandBuffer(commandBuffer);
 
 	VkSubmitInfo submitInfo;
@@ -1090,6 +1092,96 @@ static void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size)
 	vkQueueWaitIdle(graphicsQueue);
 
 	vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+}
+
+static void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size)
+{
+	VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+	VkBufferCopy copyRegion;
+	ZERO_OUT(copyRegion);
+	copyRegion.size = size;
+
+	vkCmdCopyBuffer(commandBuffer, src, dst, 1, &copyRegion);
+
+	endSingleTimeCommands(commandBuffer);
+}
+
+static Image createImage(
+	int width,
+	int height,
+	VkFormat format,
+	VkImageTiling tiling,
+	VkImageUsageFlags usage,
+	VkMemoryPropertyFlags properties)
+{
+	Image img;
+
+	VkImageCreateInfo imageInfo;
+	ZERO_OUT(imageInfo);
+	imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	imageInfo.imageType = VK_IMAGE_TYPE_2D;
+	imageInfo.extent.width = width;
+	imageInfo.extent.height = height;
+	imageInfo.extent.depth = 1;
+	imageInfo.mipLevels = 1;
+	imageInfo.arrayLayers = 1;
+	imageInfo.format = format;
+	imageInfo.tiling = tiling;
+	imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	imageInfo.usage = usage;
+	imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+	imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	imageInfo.flags = 0;
+
+	if (vkCreateImage(device, &imageInfo, NULL, &img.image) != VK_SUCCESS)
+	{
+		printf("failed to create image!\n");
+	}
+
+	VkMemoryRequirements memRequriements;
+	vkGetImageMemoryRequirements(device, img.image, &memRequriements);
+
+	VkMemoryAllocateInfo allocInfo;
+	ZERO_OUT(allocInfo);
+	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	allocInfo.allocationSize = memRequriements.size;
+	allocInfo.memoryTypeIndex = findMemoryType(memRequriements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+	if (vkAllocateMemory(device, &allocInfo, NULL, &img.memory) != VK_SUCCESS)
+	{
+		printf("texture alloc failed!\n");
+	}
+
+	vkBindImageMemory(device, img.image, img.memory, 0);
+
+	return img;
+}
+
+static void createTextureImage()
+{
+	int width, height, numChannels;
+
+	stbi_uc* pixels = stbi_load("data/test.png", &width, &height, &numChannels, STBI_rgb_alpha);
+
+	VkDeviceSize imageSize = width * height * 4;
+
+	if (!pixels)
+	{
+		printf("stbi oopsie!\n");
+	}
+
+	VertexBuffer stagingBuf = createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+	void* data;
+	vkMapMemory(device, stagingBuf.memory, 0, imageSize, 0, &data);
+	memcpy(data, pixels, imageSize);
+	vkUnmapMemory(device, stagingBuf.memory);
+
+	stbi_image_free(pixels);
+
+	textureImage = createImage(width, height, VK_FORMAT_B8G8R8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+	//noice
 }
 
 static void createVertexBuffer()
@@ -1313,8 +1405,6 @@ static void recreateSwapChain()
 	createDescriptorSetLayout();
 	createGraphicsPipeline();
 	createFramebuffers();
-
-	// memset(imagesInFlight, 0, sizeof(VkFence) * num_swapchain_images);
 }
 
 static float angle = 0.f;
@@ -1325,7 +1415,7 @@ static void updateUniformBuffer(int currentFrame)
 	ubo.proj = MatrixPerspective(1.f, (float)WIDTH/(float)HEIGHT, 0.1f, 25.f);
 	//ubo.proj.v[1].y *= -1.f;
 	ubo.view = MatrixLookAt(Vec3(3,-3,3), Vec3(0,0,0), Vec3(0,1,0));
-	angle += 0.01f;
+	angle += 0.001f;
 	ubo.model = MatrixRotateZ(angle);
 
 	void* data;
@@ -1425,6 +1515,7 @@ void initVulkan()
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
+	createTextureImage();
 	createVertexBuffer();
 	createIndexBuffer();
 	createUniformBuffers();
