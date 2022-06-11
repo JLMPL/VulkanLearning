@@ -1588,7 +1588,7 @@ static void updateUniformBuffer(int currentFrame)
 	UniformBufferObject ubo;
 	ubo.proj = MatrixPerspective(1.f, (float)WIDTH/(float)HEIGHT, 0.1f, 25.f);
 	ubo.proj.v[1].y *= -1.f;
-	ubo.view = MatrixLookAt(Vec3(0,0,5), Vec3(0,0,0), Vec3(0,1,0));
+	ubo.view = MatrixLookAt(Vec3(0,2,5), Vec3(0,0,0), Vec3(0,1,0));
 	angle += 0.001f;
 	ubo.model = MatrixRotateZ(angle);
 
