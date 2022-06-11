@@ -89,8 +89,6 @@ typedef struct SwapChainSupportDetails
 	int num_presentModes;
 }SwapChainSupportDetails;
 
-//static GLFWwindow* window = VK_NULL_HANDLE;
-
 static VkInstance instance = VK_NULL_HANDLE;
 static VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
 static VkSurfaceKHR surface = VK_NULL_HANDLE;
@@ -153,26 +151,14 @@ static uint16_t indices[NUM_INDS] =
 	0,1,2, 2,1,3
 };
 
-//static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
-//{
-//	framebufferResized = true;
-//}
-
 static SDL_Window* window = NULL;
 
 static void initWindow()
 {
-	//glfwInit();
-
-	//glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-
-	//window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", NULL, NULL);
-	//glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
-
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
 		
 	SDL_Vulkan_LoadLibrary("libvulkan-1.dll");
-	window = SDL_CreateWindow("Vulkano", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN);
+	window = SDL_CreateWindow("Vulkano", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 }
 
 static void cleanupSwapChain()
@@ -240,9 +226,6 @@ static void cleanup()
 	vkDestroySurfaceKHR(instance, surface, NULL);
 	vkDestroyInstance(instance, NULL);
 
-	//glfwDestroyWindow(window);
-
-	//glfwTerminate();
 	SDL_DestroyWindow(window);
 	SDL_Quit();
 }
@@ -277,23 +260,6 @@ static bool checkValidationLayerSupport()
 	return true;
 }
 
-const char** getRequiredExtensions(int* count)
-{
-	//uint32_t glfwExtensionCount = 0;
-	//const char** glfwExtensions;
-	//glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-	//*count = glfwExtensionCount;
-	//return glfwExtensions;
-
-	int extensionCount = 0;
-	const char** extensions = NULL;
-	SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, extensions);
-	
-	*count = extensionCount;
-	return extensions;
-}
-
 static void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT* createInfo)
 {
 	ZERO_OUT(*createInfo);
@@ -323,9 +289,6 @@ static void createInstance()
 	ZERO_OUT(createInfo);
 	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 	createInfo.pApplicationInfo = &appInfo;
-
-	//int extensionCount = 0;
-	//const char** extensions = getRequiredExtensions(&extensionCount);
 
 	int extensionCount = 0;
 	SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, NULL);
@@ -360,26 +323,48 @@ static void createInstance()
 	}
 }
 
+static VKAPI_ATTR VkBool32 VKAPI_CALL VulkanReportFunc(
+	VkDebugReportFlagsEXT flags,
+	VkDebugReportObjectTypeEXT objType,
+	uint64_t obj,
+	size_t location,
+	int32_t code,
+	const char* layerPrefix,
+	const char* msg,
+	void* userData)
+{
+	printf("VULKAN VALIDATION: %s\n", msg);
+	return VK_FALSE;
+}
+
+PFN_vkCreateDebugReportCallbackEXT SDL2_vkCreateDebugReportCallbackEXT = NULL;
+
 static void setupDebugMessenger()
 {
-	if (!enableValidationLayers) return;
+	//if (!enableValidationLayers) return;
 
-	VkDebugUtilsMessengerCreateInfoEXT createInfo;
-	populateDebugMessengerCreateInfo(&createInfo);
+	//VkDebugUtilsMessengerCreateInfoEXT createInfo;
+	//populateDebugMessengerCreateInfo(&createInfo);
 
-	if (CreateDebugUtilsMessengerEXT(instance, &createInfo, NULL, &debugMessenger) != VK_SUCCESS)
-	{
-		printf("failed to set up debug messenger!\n");
-	}
+	//if (CreateDebugUtilsMessengerEXT(instance, &createInfo, NULL, &debugMessenger) != VK_SUCCESS)
+	//{
+	//	printf("failed to set up debug messenger!\n");
+	//}
+
+	SDL2_vkCreateDebugReportCallbackEXT = (PFN_vkCreateDebugReportCallbackEXT)SDL_Vulkan_GetVkGetInstanceProcAddr();
+	VkDebugReportCallbackEXT debugCallback;
+
+	VkDebugReportCallbackCreateInfoEXT debugCreateInfo;
+	ZERO_OUT(debugCreateInfo);
+	debugCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
+	debugCreateInfo.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
+	debugCreateInfo.pfnCallback = VulkanReportFunc;
+
+	SDL2_vkCreateDebugReportCallbackEXT(instance, &debugCreateInfo, NULL, &debugCallback);
 }
 
 static void createSurface()
 {
-	//if (glfwCreateWindowSurface(instance, window, NULL, &surface) != VK_SUCCESS)
-	//{
-	//	printf("failed to create window surface!\n");
-	//}
-
 	if (!SDL_Vulkan_CreateSurface(window, instance, &surface))
 	{
 		printf("failed to create khrsurface!\n");
@@ -620,7 +605,6 @@ static VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR* capabilities)
 	else
 	{
 		int width, height;
-		//glfwGetFramebufferSize(window, &width, &height);
 		SDL_Vulkan_GetDrawableSize(window, &width, &height);
 
 		VkExtent2D actualExtent =
@@ -1588,11 +1572,11 @@ static void createSyncObjects()
 static void recreateSwapChain()
 {
 	int width = 0, height = 0;
-	//glfwGetFramebufferSize(window, &width, &height);
+
+	SDL_Vulkan_GetDrawableSize(window, &width, &height);
 	while (width == 0 || height == 0)
 	{
-		//glfwGetFramebufferSize(window, &width, &height);
-		//glfwWaitEvents();
+		SDL_Vulkan_GetDrawableSize(window, &width, &height);
 	}
 
 	if (vkDeviceWaitIdle(device) != VK_SUCCESS)
@@ -1734,11 +1718,8 @@ static bool isRunning = true;
 
 void mainLoop()
 {
-	//while (!glfwWindowShouldClose(window))
 	while (isRunning)
 	{
-		//glfwPollEvents();
-
 		SDL_Event event;
 		while (SDL_PollEvent(&event))
 		{
@@ -1749,6 +1730,11 @@ void mainLoop()
 				event.key.keysym.sym == SDLK_ESCAPE)
 			{
 				isRunning = false;
+			}
+
+			if (event.type == SDL_WINDOWEVENT_RESIZED)
+			{
+				framebufferResized = true;
 			}
 		}
 
