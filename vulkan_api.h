@@ -8,6 +8,7 @@ typedef struct
 {
 	vec3 pos;
 	vec3 color;
+	vec2 coord;
 }vertex_t;
 
 typedef struct

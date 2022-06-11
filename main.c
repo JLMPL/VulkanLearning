@@ -128,6 +128,8 @@ static VertexBuffer uniformBuffers[MAX_FRAMES_IN_FLIGHT];
 static VkDescriptorSet descriptorSets[MAX_FRAMES_IN_FLIGHT];
 
 static Image textureImage;
+static VkImageView textureImageView;
+static VkSampler textureSampler;
 
 static VkSemaphore imageAvailableSemaphores[MAX_FRAMES_IN_FLIGHT];
 static VkSemaphore renderFinishedSemaphores[MAX_FRAMES_IN_FLIGHT];
@@ -139,16 +141,16 @@ static bool framebufferResized = false;
 #define NUM_VERTS 4
 static vertex_t verts[NUM_VERTS] =
 {
-	{{-1,0,0}, {0,0,1}},
-	{{0,-1,0}, {1,1,1}},
-	{{1,0,0}, {1,0,0}},
-	{{0,1,0}, {0,1,0}}
+	{{-1,-1,0}, {0,0,1}, {0,0}},
+	{{1,-1,0}, {1,1,1}, {1,0}},
+	{{-1,1,0}, {1,0,0}, {0,1}},
+	{{1,1,0}, {1,1,0}, {1,1}}
 };
 
 #define NUM_INDS 6
 static uint16_t indices[NUM_INDS] =
 {
-	0,1,2, 2,3,0
+	0,1,2, 2,1,3
 };
 
 static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
@@ -190,6 +192,9 @@ static void cleanupSwapChain()
 static void cleanup()
 {
 	cleanupSwapChain();
+
+	vkDestroySampler(device, textureSampler, NULL);
+	vkDestroyImageView(device, textureImageView, NULL);
 
 	vkDestroyImage(device, textureImage.image, NULL);
 	vkFreeMemory(device, textureImage.memory, NULL);
@@ -453,7 +458,10 @@ static bool isDeviceSuitable(VkPhysicalDevice device)
 		swapChainAdequate = swapChainSupport.num_formats && swapChainSupport.num_presentModes;
 	}
 
-	return QueueFamilyIndices_isComplete(&indices) && extensionsSupported && swapChainAdequate;
+	VkPhysicalDeviceFeatures supportedFeatures;
+	vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+
+	return QueueFamilyIndices_isComplete(&indices) && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
 }
 
 static void pickPhysicalDevice()
@@ -505,6 +513,7 @@ static void createLogicalDevice()
 
 	VkPhysicalDeviceFeatures deviceFeatures;
 	ZERO_OUT(deviceFeatures);
+	deviceFeatures.samplerAnisotropy = VK_TRUE;
 
 	VkDeviceCreateInfo createInfo;
 	ZERO_OUT(createInfo);
@@ -656,30 +665,34 @@ static void createSwapChain()
 	swapChainExtent = extent;
 }
 
+static VkImageView createImageView(VkImage image, VkFormat format)
+{
+	VkImageViewCreateInfo viewInfo;
+	ZERO_OUT(viewInfo);
+	viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	viewInfo.image = image;
+	viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	viewInfo.format = format;
+	viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	viewInfo.subresourceRange.baseMipLevel = 0;
+	viewInfo.subresourceRange.levelCount = 1;
+	viewInfo.subresourceRange.baseArrayLayer = 0;
+	viewInfo.subresourceRange.layerCount = 1;
+
+	VkImageView imageView;
+	if (vkCreateImageView(device, &viewInfo, NULL, &imageView) != VK_SUCCESS)
+	{
+		printf("failed to create image view!\n");
+	}
+
+	return imageView;
+}
+
 static void createImageViews()
 {
 	for (size_t i = 0; i < num_swapchain_images; i++)
 	{
-		VkImageViewCreateInfo createInfo;
-		ZERO_OUT(createInfo);
-		createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-		createInfo.image = swapChainImages[i];
-		createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		createInfo.format = swapChainImageFormat;
-		createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		createInfo.subresourceRange.baseMipLevel = 0;
-		createInfo.subresourceRange.levelCount = 1;
-		createInfo.subresourceRange.baseArrayLayer = 0;
-		createInfo.subresourceRange.layerCount = 1;
-
-		if (vkCreateImageView(device, &createInfo, NULL, &swapChainImageViews[i]) != VK_SUCCESS)
-		{
-			printf("failed to create image views!\n");
-		}
+		swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat);
 	}
 }
 
@@ -789,7 +802,7 @@ static VkVertexInputBindingDescription Vertex_getBindingDescription()
 
 typedef struct
 {
-	VkVertexInputAttributeDescription descs[2];
+	VkVertexInputAttributeDescription descs[3];
 }vertexInputAttributeDescriptions_t;
 
 static vertexInputAttributeDescriptions_t Vertex_getAttributeDescriptions()
@@ -805,6 +818,11 @@ static vertexInputAttributeDescriptions_t Vertex_getAttributeDescriptions()
 	viad.descs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
 	viad.descs[1].offset = offsetof(vertex_t, color);
 
+	viad.descs[2].binding = 0;
+	viad.descs[2].location = 2;
+	viad.descs[2].format = VK_FORMAT_R32G32_SFLOAT;
+	viad.descs[2].offset = offsetof(vertex_t, coord);
+
 	return viad;
 }
 
@@ -818,11 +836,20 @@ static void createDescriptorSetLayout()
 	uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 	uboLayoutBinding.pImmutableSamplers = NULL;
 
+	VkDescriptorSetLayoutBinding samplerLayoutBinding;
+	ZERO_OUT(samplerLayoutBinding);
+	samplerLayoutBinding.binding = 1;
+	samplerLayoutBinding.descriptorCount = 1;
+	samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	samplerLayoutBinding.pImmutableSamplers = NULL;
+	samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	VkDescriptorSetLayoutBinding bindings[2] = {uboLayoutBinding, samplerLayoutBinding};
 	VkDescriptorSetLayoutCreateInfo layoutInfo;
 	ZERO_OUT(layoutInfo);
 	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-	layoutInfo.bindingCount = 1;
-	layoutInfo.pBindings = &uboLayoutBinding;
+	layoutInfo.bindingCount = 2;
+	layoutInfo.pBindings = bindings;
 
 	if (vkCreateDescriptorSetLayout(device, &layoutInfo, NULL, &descriptorSetLayout) != VK_SUCCESS)
 	{
@@ -904,7 +931,7 @@ static void createGraphicsPipeline()
 	rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
 	rasterizer.lineWidth = 1.0f;
 	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-	rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+	rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 	rasterizer.depthBiasEnable = VK_FALSE;
 
 	VkPipelineMultisampleStateCreateInfo multisampling;
@@ -1275,6 +1302,43 @@ static void createTextureImage()
 	vkFreeMemory(device, stagingBuf.memory, NULL);
 }
 
+static void createTextureImageView()
+{
+	textureImageView = createImageView(textureImage.image, VK_FORMAT_B8G8R8A8_SRGB);
+}
+
+static void createTextureSampler()
+{
+	VkSamplerCreateInfo samplerInfo;
+	ZERO_OUT(samplerInfo);
+	samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	samplerInfo.magFilter = VK_FILTER_LINEAR;
+	samplerInfo.minFilter = VK_FILTER_LINEAR;
+	samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.anisotropyEnable = VK_TRUE;
+
+	VkPhysicalDeviceProperties properties;
+	ZERO_OUT(properties);
+	vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+
+	samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+	samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+	samplerInfo.unnormalizedCoordinates = VK_FALSE;
+	samplerInfo.compareEnable = VK_FALSE;
+	samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	samplerInfo.mipLodBias = 0;
+	samplerInfo.minLod = 0;
+	samplerInfo.maxLod = 0;
+
+	if (vkCreateSampler(device, &samplerInfo, NULL, &textureSampler) != VK_SUCCESS)
+	{
+		printf("could not create texture sampler!\n");
+	}
+}
+
 static void createVertexBuffer()
 {
 	VkDeviceSize bufferSize = sizeof(vertex_t) * NUM_VERTS;
@@ -1333,16 +1397,20 @@ static void createUniformBuffers()
 
 static void createDescriptorPool()
 {
-	VkDescriptorPoolSize poolSize;
-	ZERO_OUT(poolSize);
-	poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	poolSize.descriptorCount = MAX_FRAMES_IN_FLIGHT;
+	VkDescriptorPoolSize poolSizes[2];
+	memset(poolSizes, 0, sizeof(VkDescriptorPoolSize) * 2);
+
+	poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	poolSizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
+
+	poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	poolSizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT;
 
 	VkDescriptorPoolCreateInfo poolInfo;
 	ZERO_OUT(poolInfo);
 	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-	poolInfo.poolSizeCount = 1;
-	poolInfo.pPoolSizes = &poolSize;
+	poolInfo.poolSizeCount = 2;
+	poolInfo.pPoolSizes = poolSizes;
 	poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
 
 	if (vkCreateDescriptorPool(device, &poolInfo, NULL, &descriptorPool) != VK_SUCCESS)
@@ -1377,19 +1445,34 @@ static void createDescriptorSets()
 		bufferInfo.offset = 0;
 		bufferInfo.range = sizeof(UniformBufferObject);
 
-		VkWriteDescriptorSet descriptorWrite;
-		ZERO_OUT(descriptorWrite);
-		descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		descriptorWrite.dstSet = descriptorSets[i];
-		descriptorWrite.dstBinding = 0;
-		descriptorWrite.dstArrayElement = 0;
-		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		descriptorWrite.descriptorCount = 1;
-		descriptorWrite.pBufferInfo = &bufferInfo;
-		descriptorWrite.pImageInfo = NULL;
-		descriptorWrite.pTexelBufferView = NULL;
+		VkDescriptorImageInfo imageInfo;
+		ZERO_OUT(imageInfo);
+		imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		imageInfo.imageView = textureImageView;
+		imageInfo.sampler = textureSampler;
 
-		vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, NULL);
+		VkWriteDescriptorSet descriptorWrites[2];
+		memset(descriptorWrites, 0, sizeof(VkWriteDescriptorSet) * 2);
+
+		descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[0].dstSet = descriptorSets[i];
+		descriptorWrites[0].dstBinding = 0;
+		descriptorWrites[0].dstArrayElement = 0;
+		descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		descriptorWrites[0].descriptorCount = 1;
+		descriptorWrites[0].pBufferInfo = &bufferInfo;
+		descriptorWrites[0].pImageInfo = NULL;
+
+		descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[1].dstSet = descriptorSets[i];
+		descriptorWrites[1].dstBinding = 1;
+		descriptorWrites[1].dstArrayElement = 0;
+		descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		descriptorWrites[1].descriptorCount = 1;
+		descriptorWrites[1].pBufferInfo = &bufferInfo;
+		descriptorWrites[1].pImageInfo = &imageInfo;
+
+		vkUpdateDescriptorSets(device, 2, descriptorWrites, 0, NULL);
 	}
 }
 
@@ -1504,8 +1587,8 @@ static void updateUniformBuffer(int currentFrame)
 {
 	UniformBufferObject ubo;
 	ubo.proj = MatrixPerspective(1.f, (float)WIDTH/(float)HEIGHT, 0.1f, 25.f);
-	//ubo.proj.v[1].y *= -1.f;
-	ubo.view = MatrixLookAt(Vec3(3,-3,3), Vec3(0,0,0), Vec3(0,1,0));
+	ubo.proj.v[1].y *= -1.f;
+	ubo.view = MatrixLookAt(Vec3(0,0,5), Vec3(0,0,0), Vec3(0,1,0));
 	angle += 0.001f;
 	ubo.model = MatrixRotateZ(angle);
 
@@ -1607,6 +1690,8 @@ void initVulkan()
 	createFramebuffers();
 	createCommandPool();
 	createTextureImage();
+	createTextureImageView();
+	createTextureSampler();
 	createVertexBuffer();
 	createIndexBuffer();
 	createUniformBuffers();
