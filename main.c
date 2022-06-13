@@ -113,7 +113,7 @@ static VkDeviceMemory depthImageMemory;
 static VkImageView depthImageView;
 
 static VkCommandPool commandPool;
-VkCommandBuffer commandBuffers[8];
+static VkCommandBuffer commandBuffers[8];
 
 static VkFence imagesInFlight[8];
 
@@ -1658,8 +1658,8 @@ static void createSyncObjects()
 static void recreateSwapChain()
 {
 	int width = 0, height = 0;
-
 	SDL_Vulkan_GetDrawableSize(window, &width, &height);
+
 	while (width == 0 || height == 0)
 	{
 		SDL_Vulkan_GetDrawableSize(window, &width, &height);
@@ -1685,10 +1685,13 @@ static float angle = 0.f;
 
 static void updateUniformBuffer(int currentFrame)
 {
+    int width = 0, height = 0;
+    SDL_Vulkan_GetDrawableSize(window, &width, &height);
+
 	UniformBufferObject ubo;
-	ubo.proj = MatrixPerspective(1.f, (float)WIDTH/(float)HEIGHT, 0.1f, 25.f);
+	ubo.proj = MatrixPerspective(1.f, (float)width/(float)height, 0.1f, 25.f);
 	ubo.proj.v[1].y *= -1.f;
-	ubo.view = MatrixLookAt(Vec3(0,2,5), Vec3(0,0,0), Vec3(0,1,0));
+	ubo.view = MatrixLookAt(Vec3(2,2,5), Vec3(0,0,0), Vec3(0,1,0));
 	angle += 0.001f;
 	ubo.model = MatrixRotateZ(angle);
 
