@@ -1023,8 +1023,8 @@ static void createGraphicsPipeline()
     depthStencil.depthWriteEnable = VK_TRUE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
-    depthStencil.minDepthBounds = 0.f;
-    depthStencil.maxDepthBounds = 1.f;
+    // depthStencil.minDepthBounds = 0.f;
+    // depthStencil.maxDepthBounds = 1.f;
     depthStencil.stencilTestEnable = VK_FALSE;
 
 	VkGraphicsPipelineCreateInfo pipelineInfo;
@@ -1055,20 +1055,15 @@ static void createGraphicsPipeline()
 
 static void createFramebuffers()
 {
-    VkImageView attachments[2][2] =
-    {
-        {swapChainImageViews[0], depthImageView},
-        {swapChainImageViews[1], depthImageView}
-    };
-
 	for (size_t i = 0; i < num_swapchain_images; i++)
 	{
+		VkImageView attachments[2] = {swapChainImageViews[i], depthImageView};
 		VkFramebufferCreateInfo framebufferInfo;
 		ZERO_OUT(framebufferInfo);
 		framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 		framebufferInfo.renderPass = renderPass;
 		framebufferInfo.attachmentCount = 2;
-		framebufferInfo.pAttachments = &attachments[i][0];
+		framebufferInfo.pAttachments = attachments;
 		framebufferInfo.width = swapChainExtent.width;
 		framebufferInfo.height = swapChainExtent.height;
 		framebufferInfo.layers = 1;
@@ -1792,9 +1787,9 @@ void initVulkan()
 	createRenderPass();
 	createDescriptorSetLayout();
 	createGraphicsPipeline();
-	createFramebuffers();
 	createCommandPool();
 	createDepthResources();
+	createFramebuffers();
 	createTextureImage();
 	createTextureImageView();
 	createTextureSampler();
