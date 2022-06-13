@@ -108,6 +108,10 @@ static VkImage swapChainImages[8];
 static VkImageView swapChainImageViews[8];
 static VkFramebuffer swapChainFramebuffers[8];
 
+static VkImage depthImage;
+static VkDeviceMemory depthImageMemory;
+static VkImageView depthImageView;
+
 static VkCommandPool commandPool;
 VkCommandBuffer commandBuffers[8];
 
@@ -136,19 +140,25 @@ static size_t currentFrame = 0;
 
 static bool framebufferResized = false;
 
-#define NUM_VERTS 4
+#define NUM_VERTS 8
 static vertex_t verts[NUM_VERTS] =
 {
 	{{-1,-1,0}, {0,0,1}, {0,0}},
 	{{1,-1,0}, {1,1,1}, {1,0}},
 	{{-1,1,0}, {1,0,0}, {0,1}},
-	{{1,1,0}, {1,1,0}, {1,1}}
+	{{1,1,0}, {1,1,0}, {1,1}},
+
+	{{-1,-1,1}, {0,0,1}, {0,0}},
+	{{1,-1,1}, {1,1,1}, {1,0}},
+	{{-1,1,1}, {1,0,0}, {0,1}},
+	{{1,1,1}, {1,1,0}, {1,1}}
 };
 
-#define NUM_INDS 6
+#define NUM_INDS 12
 static uint16_t indices[NUM_INDS] =
 {
-	0,1,2, 2,1,3
+	4,5,6, 6,5,7,
+	0,1,2, 2,1,3,
 };
 
 static SDL_Window* window = NULL;
