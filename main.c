@@ -115,8 +115,6 @@ static VkImageView depthImageView;
 static VkCommandPool commandPool;
 static VkCommandBuffer commandBuffers[8];
 
-static VkFence imagesInFlight[8];
-
 static VkRenderPass renderPass;
 static VkDescriptorSetLayout descriptorSetLayout;
 static VkPipelineLayout pipelineLayout;
@@ -166,7 +164,7 @@ static SDL_Window* window = NULL;
 static void initWindow()
 {
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
-		
+
 	SDL_Vulkan_LoadLibrary("libvulkan-1.dll");
 	window = SDL_CreateWindow("Vulkano", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 }
@@ -175,7 +173,7 @@ static void cleanupSwapChain()
 {
     vkDestroyImageView(device, depthImageView, NULL);
     vkDestroyImage(device, depthImage, NULL);
-    vkFreeMemory(device, depthImageView, NULL);
+    vkFreeMemory(device, depthImageMemory, NULL);
 
 	for (int i = 0; i < num_swapchain_images; i++)
 	{
@@ -304,7 +302,7 @@ static void createInstance()
 	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 	createInfo.pApplicationInfo = &appInfo;
 
-	int extensionCount = 0;
+	unsigned int extensionCount = 0;
 	SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, NULL);
 	const char* extensions[32];
 	SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, extensions);
@@ -723,6 +721,33 @@ static void createImageViews()
 	}
 }
 
+static VkFormat findSupportedFormat(VkFormat* candidates, int numCandidates, VkImageTiling tiling, VkFormatFeatureFlags features)
+{
+	for (int i = 0; i < numCandidates; i++)
+	{
+		VkFormatProperties props;
+		vkGetPhysicalDeviceFormatProperties(physicalDevice, candidates[i], &props);
+
+		if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features)
+		{
+			return candidates[i];
+		}
+		else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features)
+		{
+			return candidates[i];
+		}
+	}
+
+	return VK_FORMAT_UNDEFINED;
+}
+
+static VkFormat findDepthFormat()
+{
+	VkFormat formatCandidates[3] = { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT };
+
+	return findSupportedFormat(formatCandidates, 3, VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
+}
+
 static void createRenderPass()
 {
 	VkAttachmentDescription colorAttachment;
@@ -1092,29 +1117,21 @@ static void createCommandPool()
 	}
 }
 
-VkFormat findSupportedFormat(VkFormat* candidates, int numCandidates, VkImageTiling tiling, VkFormatFeatureFlags features)
+static int findMemoryType(int typeFilter, VkMemoryPropertyFlags properties)
 {
-    for (int i = 0; i < numCandidates; i++)
-    {
-        VkFormatProperties props;
-        vkGetPhysicalDeviceFormatProperties(physicalDevice, candidates[i], &props);
+	VkPhysicalDeviceMemoryProperties memProperties;
+	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
 
-        if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features)
-        {
-            return candidates[i];
-        }
-        else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features)
-        {
-            return candidates[i];
-        }
-    }
-}
+	for (int i = 0; i < memProperties.memoryTypeCount; i++)
+	{
+		if (typeFilter & (1 << i) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
+		{
+			return i;
+		}
+	}
 
-VkFormat findDepthFormat()
-{
-	VkFormat formatCandidates[3] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT};
-
-    return findSupportedFormat(formatCandidates, 3, VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
+	printf("Could not find suitable memory type for VkBuffer!\n");
+	return INVALID_INDEX;
 }
 
 static Image createImage(
@@ -1177,22 +1194,6 @@ static void createDepthResources()
     depthImageMemory = depthImg.memory;
 
     depthImageView = createImageView(depthImg.image, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
-}
-
-static int findMemoryType(int typeFilter, VkMemoryPropertyFlags properties)
-{
-	VkPhysicalDeviceMemoryProperties memProperties;
-	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
-
-	for (int i = 0; i < memProperties.memoryTypeCount; i++)
-	{
-		if (typeFilter & (1 << i) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
-		{
-			return i;
-		}
-	}
-
-	printf("Could not find suitable memory type for VkBuffer!\n");
 }
 
 static VertexBuffer createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties)
@@ -1301,8 +1302,8 @@ static void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout 
 	barrier.srcAccessMask = 0; //TODO
 	barrier.dstAccessMask = 0; //TODO
 
-	VkPipelineStageFlags srcStage;
-	VkPipelineStageFlags dstStage;
+	VkPipelineStageFlags srcStage = VK_PIPELINE_STAGE_NONE_KHR;
+	VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_NONE_KHR;
 
 	if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
 	{
@@ -1456,7 +1457,7 @@ static void createVertexBuffer()
 
 static void createIndexBuffer()
 {
-	VkDevice bufferSize = sizeof(uint16_t) * NUM_INDS;
+	VkDeviceSize bufferSize = sizeof(uint16_t) * NUM_INDS;
 
 	VertexBuffer stagingBuf = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -1622,7 +1623,7 @@ static void recordCommandBuffer(VkCommandBuffer commandBuffer, int imageIndex)
 	vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, NULL);
 	vkCmdBindIndexBuffer(commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT16);
-		
+
 	vkCmdDrawIndexed(commandBuffer, NUM_INDS, 1, 0, 0, 0);
 
 	vkCmdEndRenderPass(commandBuffer);
@@ -1844,4 +1845,6 @@ int main()
 	initVulkan();
 	mainLoop();
 	cleanup();
+
+	return 0;
 }
