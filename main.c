@@ -963,7 +963,7 @@ static void createGraphicsPipeline()
 	ZERO_OUT(vertexInputInfo);
 	vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 	vertexInputInfo.vertexBindingDescriptionCount = 1;
-	vertexInputInfo.vertexAttributeDescriptionCount = 2;
+	vertexInputInfo.vertexAttributeDescriptionCount = 3;
 	vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
 	vertexInputInfo.pVertexAttributeDescriptions = attribDesc.descs;
 

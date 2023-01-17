@@ -151,6 +151,8 @@
     <ClCompile Include="main.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="raymath.h" />
+    <ClInclude Include="stb_image.h" />
     <ClInclude Include="vulkan_api.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
