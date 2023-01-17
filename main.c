@@ -1,5 +1,4 @@
 #define _CRT_SECURE_NO_WARNINGS
-
 #include "vulkan_api.h"
 
 #define STB_IMAGE_IMPLEMENTATION
